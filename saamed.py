@@ -26,67 +26,74 @@ class OrderState(StatesGroup):
 
 # --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
 def get_product_kb():
-    buttons = [[KeyboardButton(text=f"💊 {name}")] for name in PRICE_LIST.keys()]
+    buttons = [[KeyboardButton(text=name)] for name in PRICE_LIST.keys()]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True, one_time_keyboard=True)
 
 def get_action_kb():
     return ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton(text="🛒 Продолжить покупки"), KeyboardButton(text="✅ Оформить заказ")]
+        [KeyboardButton(text="Продолжить покупки"), KeyboardButton(text="Оформить заказ")]
     ], resize_keyboard=True)
+
+def format_money(amount):
+    return f"{amount:,.0f}".replace(",", " ")
 
 # --- ХЕНДЛЕРЫ ---
 @dp.message(Command("start"))
 async def start(message: types.Message, state: FSMContext):
     await state.set_data({'cart': []})
 
-    # Путь к папке img
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    img_folder = os.path.join(base_dir, "img")
-
-    # Отправка фото
-    photo_files = ["1.png", "2.png", "3.png"]
-    media_group = []
-    for p in photo_files:
-        path = os.path.join(img_folder, p)
-        if os.path.exists(path):
-            media_group.append(InputMediaPhoto(media=FSInputFile(path)))
-
-    if media_group:
-        await message.answer_media_group(media=media_group)
-
-    welcome_text = """
-🌟 *Добро пожаловать в SAA MED!* 🌟
-
-Мы рады видеть вас в нашем магазине качественной медицинской продукции! 💊
-
-📋 *Как сделать заказ:*
-1️⃣ Выберите товар из списка ниже
-2️⃣ Укажите необходимое количество
-3️⃣ Добавьте в корзину или оформите заказ
-
-━━━━━━━━━━━━━━━━━━━━
-✨ *Наш ассортимент:*
-"""
+    # Отправляем приветственный текст СРАЗУ, не дожидаясь загрузки фото
+    welcome_text = (
+        "<b>═══════════════════════════════════</b>\n"
+        "       <b>Добро пожаловать</b>\n"
+        "          в <b>SAA MED</b>\n"
+        "<b>═══════════════════════════════════</b>\n\n"
+        "Мы рады видеть вас в нашем магазине качественной медицинской продукции.\n\n"
+        "<b>Как сделать заказ:</b>\n"
+        "  1. Выберите товар из списка ниже\n"
+        "  2. Укажите необходимое количество\n"
+        "  3. Добавьте в корзину или оформите заказ\n\n"
+        "<b>───────────────────────────────────</b>\n"
+        "<b>Наш ассортимент:</b>\n"
+    )
 
     for name, info in PRICE_LIST.items():
         total = info['price'] + info['nds']
-        welcome_text += f"\n💊 *{name}*\n   💰 {total:,.0f} сум"
+        welcome_text += f"\n  • <b>{name}</b>\n     {format_money(total)} сум\n"
 
-    welcome_text += "\n\n👇 *Выберите товар:*"
+    welcome_text += "\n<b>───────────────────────────────────</b>\n<i>Выберите товар из списка ниже:</i>"
 
-    await message.answer(welcome_text, reply_markup=get_product_kb(), parse_mode="Markdown")
+    # Параллельно отправляем фото и текст — бот отвечает мгновенно
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    img_folder = os.path.join(base_dir, "img")
+    photo_files = ["1.png", "2.png", "3.png"]
+
+    async def send_photos():
+        media_group = []
+        for p in photo_files:
+            path = os.path.join(img_folder, p)
+            if os.path.exists(path):
+                media_group.append(InputMediaPhoto(media=FSInputFile(path)))
+        if media_group:
+            try:
+                await message.answer_media_group(media=media_group)
+            except Exception:
+                pass  # Если фото не загрузятся — не блокируем работу бота
+
+    # Запускаем отправку фото в фоне и сразу отвечаем текстом
+    asyncio.create_task(send_photos())
+    await message.answer(welcome_text, reply_markup=get_product_kb(), parse_mode="HTML")
     await state.set_state(OrderState.choosing_product)
 
 @dp.message(OrderState.choosing_product)
 async def choose_product(message: types.Message, state: FSMContext):
-    # Убираем эмодзи из текста для сравнения
-    product_name = message.text.replace("💊 ", "")
+    product_name = message.text
 
     if product_name not in PRICE_LIST:
         return await message.answer(
-            "⚠️ *Ошибка!*\n\nПожалуйста, выберите товар из списка ниже, нажав на кнопку.",
+            "<b>⚠ Ошибка</b>\n\nПожалуйста, выберите товар из списка ниже, нажав на кнопку.",
             reply_markup=get_product_kb(),
-            parse_mode="Markdown"
+            parse_mode="HTML"
         )
 
     await state.update_data(current_product=product_name)
@@ -94,25 +101,26 @@ async def choose_product(message: types.Message, state: FSMContext):
     info = PRICE_LIST[product_name]
     price_with_nds = info['price'] + info['nds']
 
-    product_info = f"""
-📦 *Выбранный товар:*
-━━━━━━━━━━━━━━━━━━━━
-💊 *{product_name}*
-💰 Цена: {price_with_nds:,.0f} сум (включая НДС)
-━━━━━━━━━━━━━━━━━━━━
+    product_info = (
+        "<b>┌───────────────────────────────────┐</b>\n"
+        "<b>│  Выбранный товар                  │</b>\n"
+        "<b>└───────────────────────────────────┘</b>\n\n"
+        f"<b>{product_name}</b>\n\n"
+        f"   Цена:  <b>{format_money(price_with_nds)} сум</b>\n"
+        "   <i>(включая НДС)</i>\n\n"
+        "<b>───────────────────────────────────</b>\n"
+        "<i>Введите количество (в штуках):</i>"
+    )
 
-🔢 *Введите количество* (в штуках):
-"""
-
-    await message.answer(product_info, parse_mode="Markdown")
+    await message.answer(product_info, parse_mode="HTML")
     await state.set_state(OrderState.entering_quantity)
 
 @dp.message(OrderState.entering_quantity)
 async def enter_qty(message: types.Message, state: FSMContext):
     if not message.text.isdigit() or int(message.text) <= 0:
         return await message.answer(
-            "❌ *Неверный формат!*\n\nПожалуйста, введите целое положительное число.\n\n💡 *Пример:* `5`",
-            parse_mode="Markdown"
+            "<b>Неверный формат</b>\n\nПожалуйста, введите целое положительное число.\n\n<i>Пример:</i> <code>5</code>",
+            parse_mode="HTML"
         )
 
     quantity = int(message.text)
@@ -124,44 +132,48 @@ async def enter_qty(message: types.Message, state: FSMContext):
     info = PRICE_LIST[data['current_product']]
     item_total = (info['price'] + info['nds']) * quantity
 
-    success_msg = f"""
-✅ *Товар добавлен в корзину!*
-
-🛒 *Что в корзине:*
-"""
+    success_msg = (
+        "<b>┌───────────────────────────────────┐</b>\n"
+        "<b>│    Товар добавлен в корзину       │</b>\n"
+        "<b>└───────────────────────────────────┘</b>\n\n"
+        "<b>Содержимое корзины:</b>\n"
+    )
 
     cart_total = 0
     for item in cart:
         item_info = PRICE_LIST[item['name']]
         item_cost = (item_info['price'] + item_info['nds']) * item['qty']
         cart_total += item_cost
-        success_msg += f"• {item['name']}: {item['qty']} шт. — {item_cost:,.0f} сум\n"
+        success_msg += f"\n  • {item['name']}\n     {item['qty']} шт. — {format_money(item_cost)} сум"
 
-    success_msg += f"\n💰 *Общая сумма:* {cart_total:,.0f} сум"
-    success_msg += "\n\n👇 *Что дальше?*"
+    success_msg += (
+        f"\n\n<b>───────────────────────────────────</b>\n"
+        f"<b>Общая сумма:</b>  <b>{format_money(cart_total)} сум</b>\n"
+        f"<b>───────────────────────────────────</b>\n\n"
+        f"<i>Выберите действие:</i>"
+    )
 
-    await message.answer(success_msg, reply_markup=get_action_kb(), parse_mode="Markdown")
+    await message.answer(success_msg, reply_markup=get_action_kb(), parse_mode="HTML")
     await state.set_state(OrderState.after_product)
 
-@dp.message(OrderState.after_product, F.text == "🛒 Продолжить покупки")
+@dp.message(OrderState.after_product, F.text == "Продолжить покупки")
 async def continue_buying(message: types.Message, state: FSMContext):
     await message.answer(
-        "🛍️ *Продолжаем покупки!*\n\nВыберите следующий товар из списка:",
+        "<b>───────────────────────────────────</b>\n\n<i>Выберите следующий товар из списка:</i>",
         reply_markup=get_product_kb(),
-        parse_mode="Markdown"
+        parse_mode="HTML"
     )
     await state.set_state(OrderState.choosing_product)
 
-@dp.message(OrderState.after_product, F.text == "✅ Оформить заказ")
+@dp.message(OrderState.after_product, F.text == "Оформить заказ")
 async def finish_order(message: types.Message, state: FSMContext):
     data = await state.get_data()
 
-    summary = """
-╔══════════════════════════════╗
-║      📋 *ВАШ ЗАКАЗ* 📋       ║
-╚══════════════════════════════╝
-
-"""
+    summary = (
+        "<b>═══════════════════════════════════</b>\n"
+        "          <b>ВАШ ЗАКАЗ</b>\n"
+        "<b>═══════════════════════════════════</b>\n\n"
+    )
 
     total_sum, total_nds = 0, 0
     item_number = 1
@@ -172,11 +184,11 @@ async def finish_order(message: types.Message, state: FSMContext):
         nds = info['nds'] * item['qty']
         item_total = cost + nds
 
-        summary += f"*{item_number}. {item['name']}*\n"
-        summary += f"   📦 Количество: {item['qty']} шт.\n"
-        summary += f"   💰 Стоимость: {item_total:,.0f} сум\n"
-        summary += f"   📊 НДС: {nds:,.0f} сум\n"
-        summary += "   ───────────────────\n"
+        summary += f"<b>{item_number}. {item['name']}</b>\n"
+        summary += f"     Количество:  {item['qty']} шт.\n"
+        summary += f"     Стоимость:   {format_money(item_total)} сум\n"
+        summary += f"     НДС:         {format_money(nds)} сум\n"
+        summary += "     ─────────────────────────\n"
 
         total_sum += cost
         total_nds += nds
@@ -184,26 +196,30 @@ async def finish_order(message: types.Message, state: FSMContext):
 
     grand_total = total_sum + total_nds
 
-    summary += f"""
-💎 *ИТОГО К ОПЛАТЕ:*
-━━━━━━━━━━━━━━━━━━━━
-💰 Сумма без НДС: {total_sum:,.0f} сум
-📊 НДС: {total_nds:,.0f} сум
-✨ *ОБЩАЯ СУММА: {grand_total:,.0f} сум* ✨
-━━━━━━━━━━━━━━━━━━━━
+    summary += (
+        f"\n<b>═══════════════════════════════════</b>\n"
+        f"          <b>ИТОГО К ОПЛАТЕ</b>\n"
+        f"<b>═══════════════════════════════════</b>\n"
+        f"  Сумма без НДС:  {format_money(total_sum)} сум\n"
+        f"  НДС:            {format_money(total_nds)} сум\n"
+        f"<b>═══════════════════════════════════</b>\n"
+        f"  <b>ОБЩАЯ СУММА:</b>\n"
+        f"  <b>{format_money(grand_total)} сум</b>\n"
+        f"<b>═══════════════════════════════════</b>\n\n"
+        f"<b>═══════════════════════════════════</b>\n"
+        f"        <b>РЕКВИЗИТЫ СААМЕД</b>\n"
+        f"<b>═══════════════════════════════════</b>\n"
+        f"  Адрес:  Toshkent Shahri,\n"
+        f"          Uchtepa tumani\n\n"
+        f"  Банк:   Biznesni rivojlantirish\n"
+        f"          banki\n\n"
+        f"  Р/С:    2020 8000 1074 2309 5001\n"
+        f"<b>═══════════════════════════════════</b>\n\n"
+        f"<i>Спасибо за заказ!</i>\n"
+        f"<i>Мы свяжемся с вами в ближайшее время.</i>"
+    )
 
-🏢 *КОНТАКТЫ SAA MED:*
-━━━━━━━━━━━━━━━━━━━━
-📍 Адрес: Toshkent Shahri, Uchtepa tumani
-🏦 Банк: Biznesni rivojlantirish banki
-💳 Р/С: 2020 8000 1074 2309 5001
-━━━━━━━━━━━━━━━━━━━━
-
-🎉 *Спасибо за заказ!*
-💬 Мы свяжемся с вами в ближайшее время.
-"""
-
-    await message.answer(summary, reply_markup=ReplyKeyboardRemove(), parse_mode="Markdown")
+    await message.answer(summary, reply_markup=ReplyKeyboardRemove(), parse_mode="HTML")
     await state.clear()
 
 async def main():
